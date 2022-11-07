@@ -44,3 +44,17 @@ class Encoder(nn.Module):
         mu = self.fc_mu(out)
         logvar = self.fc_logvar(out)
         return mu, logvar
+
+    def reparam_trick(self, mu, logvar):
+        """
+        Reparameterize a random perturbation in the latent space to make it back-propagatable.
+        :param mu: The mean component of the latent space
+        :param logvar: The logarithm of the variance of the latent space
+        :return: Backpropagatable random sample from that distribution
+        """
+        repar = torch.normal(0, 1, logvar.shape)
+        # TODO is this accurate? According to the slide, input is sigma^2, but we add sigma * (0,1) gaussian randomness
+        new_log = 0.5 * logvar * repar
+        ret = mu + new_log
+        return ret
+    
