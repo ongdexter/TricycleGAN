@@ -28,10 +28,8 @@ class Edge2Shoe(data.Dataset):
         image = Image.open(self.image_list[index]).resize((256, 128), resample=Image.BILINEAR)
         image = np.asarray(image).transpose(2, 0, 1)
         image_tensor = torch.from_numpy(image).float()
-        
-        # TODO: figure out proper transformation for data. Currently just scaling it into [0, 1]
-        edge_tensor = image_tensor[:, :, :128] / 255.
-        rgb_tensor = image_tensor[:, :, 128:] / 255.
+        edge_tensor = image_tensor[:, :, :128]
+        rgb_tensor = image_tensor[:, :, 128:]
         return edge_tensor, rgb_tensor
     
     def __len__(self):
@@ -49,8 +47,8 @@ def visualize_batch(batch):
     fig, ax = plt.subplots(n_img, 2)
     
     for i in range(n_img):
-        e = edges[i, ...]
-        r = rgbs[i, ...]
+        e = edges[i, ...] / 255.
+        r = rgbs[i, ...] / 255.
         ax[i, 0].imshow(e.numpy().transpose(1, 2, 0))
         ax[i, 1].imshow(r.numpy().transpose(1, 2, 0))
         ax[i, 0].axis('off')

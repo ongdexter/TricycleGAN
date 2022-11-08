@@ -52,9 +52,11 @@ class Encoder(nn.Module):
         :param logvar: The logarithm of the variance of the latent space
         :return: Backpropagatable random sample from that distribution
         """
-        repar = torch.normal(0, 1, logvar.shape)
-        # TODO is this accurate? According to the slide, input is sigma^2, but we add sigma * (0,1) gaussian randomness
-        new_log = 0.5 * logvar * repar
-        ret = mu + new_log
+        repar = torch.normal(0, 1, logvar.shape)    # draw random samples from (0, 1) normal distribution
+        new_log = 0.5 * logvar  # input logvar is logarithm of sigma^2, we need logarithm of sigma
+        std = torch.exp(new_log)    # exponentiate to get value of sigma
+        eps = std * repar   # apply the trick
+        ret = mu + eps    # get the actual sample
         return ret
+    
     

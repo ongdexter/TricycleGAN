@@ -1,4 +1,12 @@
 import warnings
+
+import numpy as np
+
+from datasets.edge2shoes import Edge2Shoe
+from models.discriminators import Discriminator
+from models.encoders import Encoder
+from models.generators import Generator
+
 warnings.filterwarnings("ignore")
 from torch.utils import data
 from torch import nn, optim
@@ -23,7 +31,7 @@ lambda_pixel =        # Loss weights for pixel loss
 lambda_latent =       # Loss weights for latent regression 
 lambda_kl =           # Loss weights for kl divergence
 latent_dim =          # latent dimension for the encoded images from domain B
-gpu_id = 
+gpu_id =
 
 # Normalize image tensor
 def norm(image):
