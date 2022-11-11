@@ -2,10 +2,31 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
+import encoders
+import generators
+import discriminators
 
 class BicycleGAN(nn.Module):
-    def __init__(self):
+    _enc_training_cfg = {
+        'lr_start': 5e-3,
+        'exp_lr_gamma': 0.96
+    }
+    _gen_training_cfg = {
+        'lr_start': 5e-3,
+        'exp_lr_gamma': 0.96
+    }
+    _dis_training_cfg = {
+        'lr_start': 5e-3,
+        'exp_lr_gamma': 0.96
+    }
+    
+    def __init__(self, latent_dim, img_shape):
         super(BicycleGAN, self).__init__()
+        
+        # @TODO initialize properly
+        self.encoder = encoders.Encoder()
+        self.generator = generators.Generator_Unet()
+        self.discriminator = discriminators.Discriminator()
         
     def generator_loss(self, input_img, generated_img):
         criterion = nn.L1Loss()
@@ -40,4 +61,22 @@ class BicycleGAN(nn.Module):
     def validation_epoch_end(self, outputs):
         return
     
+    def configure_optimizers(self):
+        opt_enc = torch.optim.Adam(
+            self.encoder.parameters(),
+            lr=self._default_training_cfg['lr_start']
+        )
+        opt_gen = torch.optim.Adam(
+            self.generator.parameters(),
+            lr=self._default_training_cfg['lr_start']
+        )
+        opt_dis = torch.optim.Adam(
+            self.discriminator.parameters(),
+            lr=self._default_training_cfg['lr_start']
+        )
+        sch_enc = torch.optim.lr_scheduler.ExponentialLR(opt_enc, gamma=self._enc_training_cfg['exp_lr_gamma'])
+        sch_gen = torch.optim.lr_scheduler.ExponentialLR(opt_enc, gamma=self._gen_training_cfg['exp_lr_gamma'])
+        sch_dis = torch.optim.lr_scheduler.ExponentialLR(opt_enc, gamma=self._dis_training_cfg['exp_lr_gamma'])
+        
+        return [opt_enc, opt_gen, opt_dis], [sch_enc, sch_gen, sch_dis]
     
