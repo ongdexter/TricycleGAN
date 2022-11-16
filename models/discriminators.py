@@ -1,9 +1,12 @@
+import pytorch_lightning as pl
 from torchvision.models import resnet18
 import torch.nn.functional as F
 import torch.nn as nn
 import numpy as np
 import torch
 import pdb
+
+from models.generators import ConvBlock
 
 
 ##############################
@@ -31,7 +34,7 @@ class Discriminator(nn.Module):
         kern_sz = 4
         conv_stride = 2
         pad_width = 1
-        use_bias = False    # only applies to layers followed by batchnorm
+        use_bias = False  # only applies to layers followed by batchnorm
 
         # leaky ReLU params
         lrelu_slope = 0.2
@@ -43,48 +46,102 @@ class Discriminator(nn.Module):
         # begin building a sequence of layers
         n_filt = 64
         layers = [
-            nn.Conv2d(in_channels, n_filt, kernel_size=kern_sz, stride=conv_stride, padding=pad_width),
-            nn.LeakyReLU(lrelu_slope, lrelu_inplace)
+            nn.Conv2d(
+                in_channels,
+                n_filt,
+                kernel_size=kern_sz,
+                stride=conv_stride,
+                padding=pad_width,
+            ),
+            nn.LeakyReLU(lrelu_slope, lrelu_inplace),
         ]
 
         # batch-normalized layers
         for i in range(1, 3):
-            nf_mult = 2 ** i
-            layers.extend([
-                nn.Conv2d(
-                    n_filt * nf_mult // 2,
-                    n_filt * nf_mult,
-                    kernel_size=kern_sz,
-                    stride=conv_stride,
-                    padding=pad_width,
-                    bias=use_bias   # due to batch-norm coming up
-                ),
-                nn.BatchNorm2d(n_filt * nf_mult),
-                nn.LeakyReLU(lrelu_slope, lrelu_inplace)
-            ])
+            nf_mult = 2**i
+            layers.extend(
+                [
+                    nn.Conv2d(
+                        n_filt * nf_mult // 2,
+                        n_filt * nf_mult,
+                        kernel_size=kern_sz,
+                        stride=conv_stride,
+                        padding=pad_width,
+                        bias=use_bias,  # due to batch-norm coming up
+                    ),
+                    nn.BatchNorm2d(n_filt * nf_mult),
+                    nn.LeakyReLU(lrelu_slope, lrelu_inplace),
+                ]
+            )
 
         # final layers - note that stride is different now
-        layers.extend([
-            nn.Conv2d(n_filt * nf_mult, n_filt * nf_mult * 2, kernel_size=kern_sz, stride=fconv_stride, padding=pad_width, bias=use_bias),
-            nn.BatchNorm2d(n_filt * nf_mult),
-            nn.LeakyReLU(lrelu_slope, lrelu_inplace)
-        ])
+        layers.extend(
+            [
+                nn.Conv2d(
+                    n_filt * nf_mult,
+                    n_filt * nf_mult * 2,
+                    kernel_size=kern_sz,
+                    stride=fconv_stride,
+                    padding=pad_width,
+                    bias=use_bias,
+                ),
+                nn.BatchNorm2d(n_filt * nf_mult),
+                nn.LeakyReLU(lrelu_slope, lrelu_inplace),
+            ]
+        )
         layers.append(
-            nn.Conv2d(n_filt * nf_mult, 1, kernel_size=kern_sz, stride=fconv_stride, padding=pad_width)
+            nn.Conv2d(
+                n_filt * nf_mult,
+                1,
+                kernel_size=kern_sz,
+                stride=fconv_stride,
+                padding=pad_width,
+            )
         )
 
         # store as a sequential model
         self.core = nn.Sequential(*layers)
 
     def forward(self, x):
-        # TODO: data is not going to be a simple tensor, it might be a tuple - what should forward be doing??
+        """
+        Execute a forward pass of the Discriminator model.
+        :param x: Input should be a standard NxCx<img_dims> volume
+        :return: Batch-sized vector, for single-scale loss
+        """
         return self.core(x)
 
 
-if __name__ == '__main__':
+class TwinDiscriminator(nn.Module):
+
+    def __init__(self):
+        super(TwinDiscriminator, self).__init__()
+
+        self.scale_a = nn.Sequential(
+            nn.AvgPool2d(kernel_size=3, stride=2, padding=0, count_include_pad=False),
+            ConvBlock(3, 32, k=4, s=2, p=1, norm=False, non_linear="leaky_relu"),
+            ConvBlock(32, 64, k=4, s=2, p=1, norm=True, non_linear="leaky-relu"),
+            ConvBlock(64, 128, k=4, s=1, p=1, norm=True, non_linear="leaky-relu"),
+            ConvBlock(128, 1, k=4, s=1, p=1, norm=False, non_linear=None),
+        )
+
+        self.scale_b = nn.Sequential(
+            ConvBlock(3, 64, k=4, s=2, p=1, norm=False, non_linear="leaky_relu"),
+            ConvBlock(64, 128, k=4, s=2, p=1, norm=True, non_linear="leaky-relu"),
+            ConvBlock(128, 256, k=4, s=1, p=1, norm=True, non_linear="leaky-relu"),
+            ConvBlock(256, 1, k=4, s=1, p=1, norm=False, non_linear=None),
+        )
+
+    def forward(self, x):
+        out_a = self.scale_a(x)
+        out_b = self.scale_b(x)
+
+        return out_a, out_b
+
+
+if __name__ == "__main__":
     test_num = 0
 
     if test_num == 0:
         dummy_model = Discriminator()
         # TODO: need to test this somehow
-        #dummy_input = torch.zeros((...))
+        # dummy_input = torch.zeros((...))

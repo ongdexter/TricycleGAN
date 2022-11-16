@@ -2,9 +2,10 @@ import warnings
 
 import cv2
 import numpy as np
+from torch.nn.functional import mse_loss
 
 from datasets.edge2shoes import Edge2Shoe
-from models.discriminators import Discriminator
+from models.discriminators import Discriminator, TwinDiscriminator
 from models.encoders import Encoder
 from models.generators import Generator_Unet as Generator
 
@@ -39,6 +40,7 @@ lambda_kl = 0.5  # Loss weights for kl divergence
 latent_dim = 8  # latent dimension for the encoded images from domain B
 gpu_id = 0
 
+
 # Normalize image tensor
 def norm(image):
     return (image / 255.0 - 0.5) * 2.0
@@ -67,8 +69,8 @@ mae_loss = torch.nn.L1Loss().to(gpu_id)
 # Define generator, encoder and discriminators
 generator = Generator(latent_dim, img_shape).to(gpu_id)
 encoder = Encoder(latent_dim).to(gpu_id)
-D_VAE = Discriminator().to(gpu_id)
-D_LR = Discriminator().to(gpu_id)
+D_VAE = TwinDiscriminator().to(gpu_id)
+D_LR = TwinDiscriminator().to(gpu_id)
 
 # Define optimizers for networks
 optimizer_E = torch.optim.Adam(encoder.parameters(), lr=lr_rate, betas=betas)
@@ -79,7 +81,6 @@ optimizer_D_LR = torch.optim.Adam(D_LR.parameters(), lr=lr_rate, betas=betas)
 # For adversarial loss (optional to use)
 valid = 1
 fake = 0
-
 
 # training visualization
 img_export_path = "./train_img/"
@@ -133,6 +134,134 @@ def export_train_vis(model, inputs, epoch_num):
         write_to_disk(image, [epoch_num, i, "gen"])  # model output
 
 
+
+def smart_mse_loss(preds, val):
+    target = val * torch.ones_like(preds, requires_grad=False)
+    return mse_loss(preds, target)
+
+def discriminator_mse_loss(real_data, fake_data, valid_label=1, fake_label=0):
+    """
+    Compute a discriminator loss.
+    :param real_data: Real data tensor, should be the discriminator output when input is GT.
+    :param fake_data: Same but for input from generator.
+    :param valid_label: Numerical value for valid target.
+    :param fake_label: Numerical value for valid target.
+    :return: Loss tensor.
+    """
+    real_loss = smart_mse_loss(real_data, valid_label)
+    fake_loss = smart_mse_loss(fake_data, fake_label)
+    return real_loss + fake_loss
+
+
+def step_discriminators(real_A, real_B):
+
+    """----- forward passes -----"""
+
+    # encoder and generator
+    enc_tensors = encoder(real_B)
+    latent_sample = encoder.reparam_trick(*enc_tensors)
+    fake_B = generator(real_A, latent_sample)
+
+    # cVAE discriminator
+    dfake_vae_1, dfake_vae_2 = D_VAE(fake_B)
+    dreal_vae_1, dreal_vae_2 = D_VAE(real_B)
+
+    # cLR discriminator
+    rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
+    fat_finger_B = generator(real_A, rand_sample)
+    dfake_lr_1, dfake_lr_2 = D_LR(fat_finger_B)
+    dreal_lr_1, dreal_lr_2 = D_LR(real_B)
+
+    """----- losses -----"""
+
+    # cVAE losses - iterate over scales
+    vae_loss_scale_1 = discriminator_mse_loss(dreal_vae_1, dfake_vae_1)
+    vae_loss_scale_2 = discriminator_mse_loss(dreal_vae_2, dfake_vae_2)
+
+    # cLR losses - iterate over scales
+    clr_loss_scale_1 = discriminator_mse_loss(dreal_lr_1, dfake_lr_1)
+    clr_loss_scale_2 = discriminator_mse_loss(dreal_lr_2, dfake_lr_2)
+
+    # sum them all up
+    disc_loss = vae_loss_scale_1 + vae_loss_scale_2 + clr_loss_scale_1 + clr_loss_scale_2
+
+    """----- backwards pass -----"""
+
+    # zero grad everything
+    optimizer_E.zero_grad()
+    optimizer_G.zero_grad()
+    optimizer_D_VAE.zero_grad()
+    optimizer_D_LR.zero_grad()
+
+    # backward
+    disc_loss.backward()
+
+    # optimizer steps
+    optimizer_D_LR.step()
+    optimizer_D_VAE.step()
+
+
+def step_gen_enc(real_A, real_B):
+
+    # encoder and generator
+    enc_tensors = encoder(real_B)
+    latent_sample = encoder.reparam_trick(*enc_tensors)
+    fake_B = generator(real_A, latent_sample)
+
+    # fool the VAE discriminator
+    dfake_vae_1, dfake_vae_2 = D_VAE(fake_B)
+    vae_loss_scale_1 = smart_mse_loss(dfake_vae_1, valid)
+    vae_loss_scale_2 = smart_mse_loss(dfake_vae_2, valid)
+
+    # fool the cLR discriminator
+    rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
+    fat_finger_B = generator(real_A, rand_sample)
+    dfake_lr_1, dfake_lr_2 = D_LR(fat_finger_B)
+    clr_loss_scale_1 = smart_mse_loss(dfake_lr_1, valid)
+    clr_loss_scale_2 = smart_mse_loss(dfake_lr_2, valid)
+
+    gen_enc_loss = vae_loss_scale_1 + vae_loss_scale_2 + clr_loss_scale_1 + clr_loss_scale_2
+
+    # KL divergence term
+    KL_div = lambda_kl * torch.sum(0.5 * (enc_tensors[0] ** 2 + torch.exp(enc_tensors[1]) - enc_tensors[1] - 1))
+
+    # image reconstruction loss
+    recon_loss = lambda_pixel * torch.mean(torch.abs(fake_B - real_B))
+
+    # sum it all up
+    total_loss = gen_enc_loss + KL_div + recon_loss
+
+    # backwards
+    # zero grad everything
+    optimizer_E.zero_grad()
+    optimizer_G.zero_grad()
+    optimizer_D_VAE.zero_grad()
+    optimizer_D_LR.zero_grad()
+
+    # backward
+    total_loss.backward(retain_graph=True)
+
+    # optimizer steps
+    optimizer_E.step()
+    optimizer_G.step()
+
+
+    # train G-only!
+    fat_enc = encoder(fat_finger_B.detach())
+    latent_recon_loss = lambda_latent * torch.mean(torch.abs(fat_enc[0] - rand_sample))
+
+    # zero grad everything
+    optimizer_E.zero_grad()
+    optimizer_G.zero_grad()
+    optimizer_D_VAE.zero_grad()
+    optimizer_D_LR.zero_grad()
+
+    # backwards
+    latent_recon_loss.backward()
+    optimizer_G.step()
+
+
+
 def main():
     # Training
     total_steps = len(loader) * num_epochs
@@ -140,7 +269,6 @@ def main():
     for e in range(num_epochs):
         start = time.time()
         for idx, data in enumerate(loader):
-
             ########## Process Inputs ##########
             edge_tensor, rgb_tensor = data
             edge_tensor, rgb_tensor = norm(edge_tensor).to(gpu_id), norm(rgb_tensor).to(
@@ -149,21 +277,8 @@ def main():
             real_A = edge_tensor
             real_B = rgb_tensor
 
-            # -------------------------------
-            #  Train Generator and Encoder
-            # ------------------------------
-            enc_tensors = encoder(edge_tensor)
-            gen_tensor = generator(torch.cat(enc_tensors, dim=-1), encoder.reparam_trick(*enc_tensors))
-
-            # ----------------------------------
-            #  Train Discriminator (cVAE-GAN)
-            # ----------------------------------
-            dvae_tensor = D_VAE(rgb_tensor, gen_tensor)
-
-            # ---------------------------------
-            #  Train Discriminator (cLR-GAN)
-            # ---------------------------------
-            dlr_tensor = D_LR(rgb_tensor, gen_tensor)
+            step_discriminators(real_A, real_B)
+            step_gen_enc(real_A, real_B)
 
             """ Optional TODO: 
 				1. You may want to visualize results during training for debugging purpose
@@ -172,4 +287,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with torch.autograd.set_detect_anomaly(True):
+        main()

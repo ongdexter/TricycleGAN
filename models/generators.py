@@ -32,15 +32,15 @@ class Generator_Unet(nn.Module):
         self.enc4 = ConvBlock(256, 512, k=4, s=2, p=1, norm=True, non_linear='leaky_relu')
         self.enc5 = ConvBlock(512, 512, k=4, s=2, p=1, norm=True, non_linear='leaky_relu')
         self.enc6 = ConvBlock(512, 512, k=4, s=2, p=1, norm=True, non_linear='leaky_relu')
-        self.enc7 = ConvBlock(512, 512, k=4, s=2, p=1, norm=True, non_linear='leaky_relu')
+        self.enc7 = ConvBlock(512, 512, k=4, s=2, p=1, norm=False, non_linear='leaky_relu')
 
-        self.dec7 = DeconvBlock(512, 512, k=4, s=2, p=1, norm=True, non_linear='relu')
-        self.dec6 = DeconvBlock(1024, 512, k=4, s=2, p=1, norm=True, non_linear='relu')
-        self.dec5 = DeconvBlock(1024, 512, k=4, s=2, p=1, norm=True, non_linear='relu')
+        self.dec1 = DeconvBlock(512, 512, k=4, s=2, p=1, norm=True, non_linear='relu')
+        self.dec2 = DeconvBlock(1024, 512, k=4, s=2, p=1, norm=True, non_linear='relu')
+        self.dec3 = DeconvBlock(1024, 512, k=4, s=2, p=1, norm=True, non_linear='relu')
         self.dec4 = DeconvBlock(1024, 256, k=4, s=2, p=1, norm=True, non_linear='relu')
-        self.dec3 = DeconvBlock(512, 128, k=4, s=2, p=1, norm=True, non_linear='relu')
-        self.dec2 = DeconvBlock(256, 64, k=4, s=2, p=1, norm=True, non_linear='relu')
-        self.dec1 = DeconvBlock(128, 3, k=4, s=2, p=1, norm=False, non_linear='Tanh')
+        self.dec5 = DeconvBlock(512, 128, k=4, s=2, p=1, norm=True, non_linear='relu')
+        self.dec6 = DeconvBlock(256, 64, k=4, s=2, p=1, norm=True, non_linear='relu')
+        self.dec7 = DeconvBlock(128, 3, k=4, s=2, p=1, norm=False, non_linear='Tanh')
 
     def forward(self, x, z):
         # latent
