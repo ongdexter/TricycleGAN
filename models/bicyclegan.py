@@ -64,15 +64,15 @@ class BicycleGAN(nn.Module):
     def configure_optimizers(self):
         opt_enc = torch.optim.Adam(
             self.encoder.parameters(),
-            lr=self._default_training_cfg['lr_start']
+            lr=self._enc_training_cfg['lr_start']
         )
         opt_gen = torch.optim.Adam(
             self.generator.parameters(),
-            lr=self._default_training_cfg['lr_start']
+            lr=self._gen_training_cfg['lr_start']
         )
         opt_dis = torch.optim.Adam(
             self.discriminator.parameters(),
-            lr=self._default_training_cfg['lr_start']
+            lr=self._dis_training_cfg['lr_start']
         )
         sch_enc = torch.optim.lr_scheduler.ExponentialLR(opt_enc, gamma=self._enc_training_cfg['exp_lr_gamma'])
         sch_gen = torch.optim.lr_scheduler.ExponentialLR(opt_enc, gamma=self._gen_training_cfg['exp_lr_gamma'])

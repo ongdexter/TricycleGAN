@@ -52,7 +52,7 @@ class Encoder(nn.Module):
         :param logvar: The logarithm of the variance of the latent space
         :return: Backpropagatable random sample from that distribution
         """
-        repar = torch.normal(0, 1, logvar.shape)    # draw random samples from (0, 1) normal distribution
+        repar = torch.normal(0, 1, logvar.shape).to(logvar.device)    # draw random samples from (0, 1) normal distribution
         new_log = 0.5 * logvar  # input logvar is logarithm of sigma^2, we need logarithm of sigma
         std = torch.exp(new_log)    # exponentiate to get value of sigma
         eps = std * repar   # apply the trick
