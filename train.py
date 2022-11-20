@@ -32,7 +32,7 @@ img_shape = (3, 128, 128)  # Please use this image dimension faster training pur
 
 # TODO: fine-tune these somehow?
 num_epochs = 50
-batch_size = 1
+batch_size = 128
 lr_rate = 2e-4  # Adam optimizer learning rate
 betas = (0.5, 0.999)  # Adam optimizer beta 1, beta 2
 lambda_pixel = 10  # Loss weights for pixel loss
@@ -59,7 +59,7 @@ def norm(image):
 
 # Denormalize image tensor
 def denorm(tensor):
-    return (((tensor + 1.0) / 2.0) * 255.0).astype(np.uint8)
+    return (((tensor + 1.0) / 2.0) * 255.0).type(torch.uint8)
 
 
 # Reparameterization helper function
@@ -181,8 +181,8 @@ def export_train_vis(inputs, outputs, epoch_num):
         image = image.permute(1, 2, 0).cpu().detach().numpy()
 
         # write to disk
-        inputs = inputs.permute(0, 2, 3, 1)
-        img_in = inputs[i, ...].detach().cpu().numpy()  # TODO: fix this as well
+        img_in = inputs[i, ...]
+        img_in = img_in.permute(1, 2, 0).cpu().detach().numpy()
 
         write_to_disk(img_in, [epoch_num, i, "src"])  # model input
         write_to_disk(image, [epoch_num, i, "gen"])  # model output
@@ -357,7 +357,7 @@ def main():
     total_steps = len(loader) * num_epochs
     step = 0
     try:
-        for e in tqdm(range(num_epochs)):
+        for e in range(num_epochs):
             start = time.time()
 
             # discriminator logging
@@ -375,7 +375,7 @@ def main():
             real_A = None
             real_B = None
             
-            for idx, data in enumerate(loader):
+            for idx, data in enumerate(tqdm(loader)):
                 ########## Process Inputs ##########
                 edge_tensor, rgb_tensor = data
                 edge_tensor, rgb_tensor = norm(edge_tensor).to(gpu_id), norm(
@@ -413,7 +413,7 @@ def main():
             rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
             fat_finger_B = generator(real_A, rand_sample)
             
-            export_train_vis(torch.cat((real_A, real_B), dim=2), torch.cat((fake_B, fat_finger_B), dim=2), e)
+            export_train_vis(torch.cat((real_A[:8], real_B[:8]), dim=-1), torch.cat((fake_B[:8], fat_finger_B[:8]), dim=-1), e)
             writer.add_image('images/real_A/train', real_A[0] / 2.0 + 0.5, e)
             writer.add_image('images/real_B/train', real_B[0] / 2.0 + 0.5, e)
             writer.add_image('images/fake_B/train', fake_B[0] / 2.0 + 0.5, e)
