@@ -32,7 +32,7 @@ img_shape = (3, 128, 128)  # Please use this image dimension faster training pur
 
 # TODO: fine-tune these somehow?
 num_epochs = 50
-batch_size = 128
+batch_size = 8
 lr_rate = 2e-4  # Adam optimizer learning rate
 betas = (0.5, 0.999)  # Adam optimizer beta 1, beta 2
 lambda_pixel = 10  # Loss weights for pixel loss
@@ -59,8 +59,7 @@ def norm(image):
 
 # Denormalize image tensor
 def denorm(tensor):
-    return (((tensor + 1.0) / 2.0) * 255.0).type(torch.uint8)
-
+    return (((tensor + 1.0) / 2.0) * 255.0)
 
 # Reparameterization helper function
 # (You may need this helper function here or inside models.py, depending on your encoder implementation)
@@ -108,6 +107,7 @@ def init_log_dir(log_dir):
         checkpoint_dir = log_dir + '/logs_v' + str(latest_ver)
     os.mkdir(checkpoint_dir)
     os.mkdir(checkpoint_dir + '/checkpoints')
+    os.mkdir(checkpoint_dir + '/images')
     
     return checkpoint_dir
 
@@ -134,7 +134,6 @@ loss_root_dir = log_dir
 training_epoch_avg_losses = []
 validation_epoch_avg_losses = []
 
-
 def log_losses(dir_path):
     teal = np.array(training_epoch_avg_losses)
     veal = np.array(validation_epoch_avg_losses)
@@ -151,7 +150,7 @@ def write_to_disk(image, format_list):
     global first_write
     fname = img_export_fmt.format(*format_list)
     # export_path = os.path.join(img_export_path, training_session_id)
-    export_path = os.path.join(log_dir, '/images')
+    export_path = os.path.join(log_dir, 'images')
     # if os.path.isdir(export_path) and first_write:
     #     print(f"[FATAL]: Training session ID {training_session_id} already exists!")
     #     raise Exception
@@ -183,6 +182,7 @@ def export_train_vis(inputs, outputs, epoch_num):
         # write to disk
         img_in = inputs[i, ...]
         img_in = img_in.permute(1, 2, 0).cpu().detach().numpy()
+        img_in = denorm(img_in)
 
         write_to_disk(img_in, [epoch_num, i, "src"])  # model input
         write_to_disk(image, [epoch_num, i, "gen"])  # model output
