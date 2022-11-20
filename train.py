@@ -26,7 +26,7 @@ import pdb
 # (You may put your needed configuration here. Please feel free to add more or use argparse. )
 # img_dir = '/home/zlz/BicycleGAN/datasets/edges2shoes/train/'
 img_dir = (
-    "/home/jackfrost/Documents/business/PENN/CIS6800/final_project/edges2shoes/train/"
+    "../edges2shoes/train/"
 )
 img_shape = (3, 128, 128)  # Please use this image dimension faster training purpose
 
@@ -59,7 +59,7 @@ def norm(image):
 
 # Denormalize image tensor
 def denorm(tensor):
-    return ((tensor + 1.0) / 2.0) * 255.0
+    return (((tensor + 1.0) / 2.0) * 255.0).astype(np.uint8)
 
 
 # Reparameterization helper function
@@ -100,28 +100,16 @@ def init_log_dir(log_dir):
     for root, dirs, subdirs in os.walk(log_dir):
         for dir in dirs:
             if 'logs_' in dir:
-                versions.append(dir.split('_')[-1])
+                versions.append(int(dir.split('_')[-1].split('v')[-1]))
     if len(versions) == 0:
         checkpoint_dir = log_dir + '/logs_v1'
     else:
-        latest_ver = int(sorted(versions)[-1].split('v')[-1]) + 1
+        latest_ver = sorted(versions)[-1] + 1
         checkpoint_dir = log_dir + '/logs_v' + str(latest_ver)
     os.mkdir(checkpoint_dir)
     os.mkdir(checkpoint_dir + '/checkpoints')
     
     return checkpoint_dir
-    # loss logging
-loss_root_dir = "./nuketown"
-training_epoch_avg_losses = []
-validation_epoch_avg_losses = []
-
-
-def log_losses(dir_path):
-    teal = np.array(training_epoch_avg_losses)
-    veal = np.array(validation_epoch_avg_losses)
-    np.savez(os.path.join(dir_path, "train_epoch_avg_losses.npz"), teal)
-    np.savez(os.path.join(dir_path, "val_epoch_avg_losses.npz"), veal)
-
 
 def save_checkpoints(log_dir, epoch):
     path = log_dir + '/checkpoints/ckpt_' + str(epoch) + '.pt'
@@ -138,8 +126,20 @@ def save_checkpoints(log_dir, epoch):
     }, path)
 
 # logging
-log_dir = init_log_dir('./logs')
+log_dir = init_log_dir('../logs')
 writer = SummaryWriter(log_dir=log_dir)
+
+# loss logging
+loss_root_dir = log_dir
+training_epoch_avg_losses = []
+validation_epoch_avg_losses = []
+
+
+def log_losses(dir_path):
+    teal = np.array(training_epoch_avg_losses)
+    veal = np.array(validation_epoch_avg_losses)
+    np.savez(os.path.join(dir_path, "train_epoch_avg_losses.npz"), teal)
+    np.savez(os.path.join(dir_path, "val_epoch_avg_losses.npz"), veal)
 
 def write_to_disk(image, format_list):
     """
@@ -150,36 +150,38 @@ def write_to_disk(image, format_list):
     """
     global first_write
     fname = img_export_fmt.format(*format_list)
-    export_path = os.path.join(img_export_path, training_session_id)
-    if os.path.isdir(export_path) and first_write:
-        print(f"[FATAL]: Training session ID {training_session_id} already exists!")
-        raise Exception
-    elif not os.path.isdir(export_path) and first_write:
-        print(f"Generating new visualizations directory: {export_path}")
-        os.mkdir(export_path)
-        first_write = False
+    # export_path = os.path.join(img_export_path, training_session_id)
+    export_path = os.path.join(log_dir, '/images')
+    # if os.path.isdir(export_path) and first_write:
+    #     print(f"[FATAL]: Training session ID {training_session_id} already exists!")
+    #     raise Exception
+    # elif not os.path.isdir(export_path) and first_write:
+    #     print(f"Generating new visualizations directory: {export_path}")
+    #     os.mkdir(export_path)
+    #     first_write = False
     export_file = os.path.join(export_path, fname)
     cv2.imwrite(export_file, image)
 
 
-def export_train_vis(model, inputs, epoch_num):
+def export_train_vis(inputs, outputs, epoch_num):
     """
     Run inference on the model, generating some outputs and storing them to disk for inspection.
     :param model: The BicycleGAN-model - should have an inference function implemented, and should be in eval mode.
     :param inputs: An input volume to run inference on, should be shaped like a batch.
     :param epoch_num: The epoch number in which the model currently is.
     """
-    outputs = (
-        model.inference(inputs).detach().cpu().permute(0, 3, 1).numpy()
-    )  # should be Bx<img_dims>
+    # outputs = (
+    #     model.inference(inputs).detach().cpu().permute(0, 3, 1).numpy()
+    # )  # should be Bx<img_dims>
     for i in range(outputs.shape[0]):
         image = outputs[i, ...]
 
         # TODO: perform some (de)-normalization and fix channel order
         image = denorm(image)
-        image = image
+        image = image.permute(1, 2, 0).cpu().detach().numpy()
 
         # write to disk
+        inputs = inputs.permute(0, 2, 3, 1)
         img_in = inputs[i, ...].detach().cpu().numpy()  # TODO: fix this as well
 
         write_to_disk(img_in, [epoch_num, i, "src"])  # model input
@@ -249,7 +251,7 @@ def step_discriminators(real_A, real_B):
         vae_loss_scale_1 + vae_loss_scale_2 + clr_loss_scale_1 + clr_loss_scale_2
     )
 
-    print(f"\tDISC LOSS: {disc_loss}")
+    # print(f"\tDISC LOSS: {disc_loss}")
 
     """----- backwards pass -----"""
 
@@ -305,7 +307,7 @@ def step_gen_enc(real_A, real_B):
     # sum it all up
     total_loss = gen_enc_loss + KL_div + recon_loss
 
-    print(f"\tTOTAL LOSS: {total_loss}")
+    # print(f"\tTOTAL LOSS: {total_loss}")
 
     # backwards
     # zero grad everything
@@ -325,7 +327,7 @@ def step_gen_enc(real_A, real_B):
     fat_enc = encoder(fat_finger_B.detach())
     latent_recon_loss = lambda_latent * torch.mean(torch.abs(fat_enc[0] - rand_sample))
 
-    print(f"\tLATENT RECON LOSS: {latent_recon_loss}")
+    # print(f"\tLATENT RECON LOSS: {latent_recon_loss}")
 
     # zero grad everything
     optimizer_E.zero_grad()
@@ -369,6 +371,10 @@ def main():
 
             # generator only logging
             batch_latent_rec_losses = []
+            
+            real_A = None
+            real_B = None
+            
             for idx, data in enumerate(loader):
                 ########## Process Inputs ##########
                 edge_tensor, rgb_tensor = data
@@ -396,9 +402,23 @@ def main():
 
                 batch_latent_rec_losses.append(latent_rec_loss)
 
-                if idx > 5:
-                    break
-
+                # if idx > 5:
+                #     break
+            
+            # visualization
+            enc_tensors = encoder(real_B)
+            latent_sample = encoder.reparam_trick(*enc_tensors)
+            fake_B = generator(real_A, latent_sample)
+            
+            rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
+            fat_finger_B = generator(real_A, rand_sample)
+            
+            export_train_vis(torch.cat((real_A, real_B), dim=2), torch.cat((fake_B, fat_finger_B), dim=2), e)
+            writer.add_image('images/real_A/train', real_A[0] / 2.0 + 0.5, e)
+            writer.add_image('images/real_B/train', real_B[0] / 2.0 + 0.5, e)
+            writer.add_image('images/fake_B/train', fake_B[0] / 2.0 + 0.5, e)
+            writer.add_image('images/fat_finger_B/train', fat_finger_B[0] / 2.0 + 0.5, e)
+                        
             training_epoch_avg_losses.append(
                 [
                     np.mean(batch_disc_losses),
@@ -411,29 +431,29 @@ def main():
             )
             # decay label noise each epoch
             label_sigma *= label_sigma_decay
+            
+            # save checkpoints
+            if e % 5 == 0:
+                save_checkpoints(log_dir, e)
+                    
+            # tensorboard logging
+            writer.add_scalar('loss_disc/train', np.mean(batch_disc_losses), e)
+            writer.add_scalar('loss_gen_enc/train', np.mean(batch_gen_enc_losses), e)
+            writer.add_scalar('loss_kl/train', np.mean(batch_kl_div_losses), e)
+            writer.add_scalar('loss_recon/train', np.mean(batch_recon_losses), e)
+            writer.add_scalar('loss_latent_rec/train', np.mean(np.mean(batch_latent_rec_losses)), e)
+            writer.add_scalar('loss_total/train', np.mean(batch_total_losses), e)
+
     finally:
         print(f'Logging losses at: {loss_root_dir}. Access with:')
         print(f"\tnp.load('{loss_root_dir}/train_epoch_avg_losses.npz', allow_pickle=True)['arr_0']")
         log_losses(loss_root_dir)
 
 
-            """ Optional TODO: 
-				1. You may want to visualize results during training for debugging purpose
-				2. Save your model every few iterations
-			"""
-        # save checkpoints
-        if e % 5 == 0:
-            save_checkpoints(log_dir, e)
-                
-        # tensorboard logging
-        # writer.add_scalar('loss1/train', , e)
-        # writer.add_scalar('loss1/val', , e)
-        # writer.add_scalar('loss2/train', , e)
-        # writer.add_scalar('loss2/val', , e)
-        # writer.add_scalar('images/real_A', , e)
-        # writer.add_scalar('images/real_B', , e)
-        # writer.add_scalar('images/', , e)
-
+        """ Optional TODO: 
+            1. You may want to visualize results during training for debugging purpose
+            2. Save your model every few iterations
+        """
 
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
