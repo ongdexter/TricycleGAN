@@ -29,16 +29,26 @@ img_dir = (
 )
 img_shape = (3, 128, 128)  # Please use this image dimension faster training purpose
 
-# CAUTION: numbers below are for testing only, completely arbitrary
+# TODO: fine-tune these somehow?
 num_epochs = 50
 batch_size = 1
-lr_rate = 1e-3  # Adam optimizer learning rate
-betas = (0.999, 0.99)  # Adam optimizer beta 1, beta 2
-lambda_pixel = 0.5  # Loss weights for pixel loss
+lr_rate = 2e-4  # Adam optimizer learning rate
+betas = (0.5, 0.999)  # Adam optimizer beta 1, beta 2
+lambda_pixel = 10  # Loss weights for pixel loss
 lambda_latent = 0.5  # Loss weights for latent regression
-lambda_kl = 0.5  # Loss weights for kl divergence
+lambda_kl = 0.01  # Loss weights for kl divergence
 latent_dim = 8  # latent dimension for the encoded images from domain B
 gpu_id = 0
+
+# For adversarial loss (optional to use)
+valid = 1
+fake = 0
+label_sigma = 0.15
+label_sigma_decay = 0.9
+
+
+def generate_random_valid():
+    return valid - np.abs(np.random.normal(0, label_sigma, 1))[0]
 
 
 # Normalize image tensor
@@ -78,15 +88,23 @@ optimizer_G = torch.optim.Adam(generator.parameters(), lr=lr_rate, betas=betas)
 optimizer_D_VAE = torch.optim.Adam(D_VAE.parameters(), lr=lr_rate, betas=betas)
 optimizer_D_LR = torch.optim.Adam(D_LR.parameters(), lr=lr_rate, betas=betas)
 
-# For adversarial loss (optional to use)
-valid = 1
-fake = 0
-
 # training visualization
 img_export_path = "./train_img/"
 training_session_id = "CHANGE_THIS"
 img_export_fmt = "train_vis_e-{}_i-{}_{}.png"
 first_write = True
+
+# loss logging
+loss_root_dir = "./nuketown"
+training_epoch_avg_losses = []
+validation_epoch_avg_losses = []
+
+
+def log_losses(dir_path):
+    teal = np.array(training_epoch_avg_losses)
+    veal = np.array(validation_epoch_avg_losses)
+    np.savez(os.path.join(dir_path, "train_epoch_avg_losses.npz"), teal)
+    np.savez(os.path.join(dir_path, "val_epoch_avg_losses.npz"), veal)
 
 
 def write_to_disk(image, format_list):
@@ -134,10 +152,10 @@ def export_train_vis(model, inputs, epoch_num):
         write_to_disk(image, [epoch_num, i, "gen"])  # model output
 
 
-
 def smart_mse_loss(preds, val):
     target = val * torch.ones_like(preds, requires_grad=False)
     return mse_loss(preds, target)
+
 
 def discriminator_mse_loss(real_data, fake_data, valid_label=1, fake_label=0):
     """
@@ -154,7 +172,6 @@ def discriminator_mse_loss(real_data, fake_data, valid_label=1, fake_label=0):
 
 
 def step_discriminators(real_A, real_B):
-
     """----- forward passes -----"""
 
     # encoder and generator
@@ -174,16 +191,31 @@ def step_discriminators(real_A, real_B):
 
     """----- losses -----"""
 
+    # random validity target to stabilize training
+    rand_valid = generate_random_valid()
+
     # cVAE losses - iterate over scales
-    vae_loss_scale_1 = discriminator_mse_loss(dreal_vae_1, dfake_vae_1)
-    vae_loss_scale_2 = discriminator_mse_loss(dreal_vae_2, dfake_vae_2)
+    vae_loss_scale_1 = discriminator_mse_loss(
+        dreal_vae_1, dfake_vae_1, valid_label=rand_valid
+    )
+    vae_loss_scale_2 = discriminator_mse_loss(
+        dreal_vae_2, dfake_vae_2, valid_label=rand_valid
+    )
 
     # cLR losses - iterate over scales
-    clr_loss_scale_1 = discriminator_mse_loss(dreal_lr_1, dfake_lr_1)
-    clr_loss_scale_2 = discriminator_mse_loss(dreal_lr_2, dfake_lr_2)
+    clr_loss_scale_1 = discriminator_mse_loss(
+        dreal_lr_1, dfake_lr_1, valid_label=rand_valid
+    )
+    clr_loss_scale_2 = discriminator_mse_loss(
+        dreal_lr_2, dfake_lr_2, valid_label=rand_valid
+    )
 
     # sum them all up
-    disc_loss = vae_loss_scale_1 + vae_loss_scale_2 + clr_loss_scale_1 + clr_loss_scale_2
+    disc_loss = (
+        vae_loss_scale_1 + vae_loss_scale_2 + clr_loss_scale_1 + clr_loss_scale_2
+    )
+
+    print(f"\tDISC LOSS: {disc_loss}")
 
     """----- backwards pass -----"""
 
@@ -200,36 +232,46 @@ def step_discriminators(real_A, real_B):
     optimizer_D_LR.step()
     optimizer_D_VAE.step()
 
+    return disc_loss.detach().cpu()
+
 
 def step_gen_enc(real_A, real_B):
-
     # encoder and generator
     enc_tensors = encoder(real_B)
     latent_sample = encoder.reparam_trick(*enc_tensors)
     fake_B = generator(real_A, latent_sample)
 
+    # random validity target to stabilize training
+    rand_valid = generate_random_valid()
+
     # fool the VAE discriminator
     dfake_vae_1, dfake_vae_2 = D_VAE(fake_B)
-    vae_loss_scale_1 = smart_mse_loss(dfake_vae_1, valid)
-    vae_loss_scale_2 = smart_mse_loss(dfake_vae_2, valid)
+    vae_loss_scale_1 = smart_mse_loss(dfake_vae_1, rand_valid)
+    vae_loss_scale_2 = smart_mse_loss(dfake_vae_2, rand_valid)
 
     # fool the cLR discriminator
     rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
     fat_finger_B = generator(real_A, rand_sample)
     dfake_lr_1, dfake_lr_2 = D_LR(fat_finger_B)
-    clr_loss_scale_1 = smart_mse_loss(dfake_lr_1, valid)
-    clr_loss_scale_2 = smart_mse_loss(dfake_lr_2, valid)
+    clr_loss_scale_1 = smart_mse_loss(dfake_lr_1, rand_valid)
+    clr_loss_scale_2 = smart_mse_loss(dfake_lr_2, rand_valid)
 
-    gen_enc_loss = vae_loss_scale_1 + vae_loss_scale_2 + clr_loss_scale_1 + clr_loss_scale_2
+    gen_enc_loss = (
+        vae_loss_scale_1 + vae_loss_scale_2 + clr_loss_scale_1 + clr_loss_scale_2
+    )
 
     # KL divergence term
-    KL_div = lambda_kl * torch.sum(0.5 * (enc_tensors[0] ** 2 + torch.exp(enc_tensors[1]) - enc_tensors[1] - 1))
+    KL_div = lambda_kl * torch.sum(
+        0.5 * (enc_tensors[0] ** 2 + torch.exp(enc_tensors[1]) - enc_tensors[1] - 1)
+    )
 
     # image reconstruction loss
     recon_loss = lambda_pixel * torch.mean(torch.abs(fake_B - real_B))
 
     # sum it all up
     total_loss = gen_enc_loss + KL_div + recon_loss
+
+    print(f"\tTOTAL LOSS: {total_loss}")
 
     # backwards
     # zero grad everything
@@ -245,10 +287,11 @@ def step_gen_enc(real_A, real_B):
     optimizer_E.step()
     optimizer_G.step()
 
-
     # train G-only!
     fat_enc = encoder(fat_finger_B.detach())
     latent_recon_loss = lambda_latent * torch.mean(torch.abs(fat_enc[0] - rand_sample))
+
+    print(f"\tLATENT RECON LOSS: {latent_recon_loss}")
 
     # zero grad everything
     optimizer_E.zero_grad()
@@ -260,31 +303,90 @@ def step_gen_enc(real_A, real_B):
     latent_recon_loss.backward()
     optimizer_G.step()
 
+    return (
+        gen_enc_loss.detach().cpu(),
+        KL_div.detach().cpu() / lambda_kl,
+        recon_loss.detach().cpu() / lambda_pixel,
+        total_loss.detach().cpu(),
+        latent_recon_loss.detach().cpu(),
+    )
 
 
 def main():
+    from tqdm import tqdm
+
+    global label_sigma
+
     # Training
     total_steps = len(loader) * num_epochs
     step = 0
-    for e in range(num_epochs):
-        start = time.time()
-        for idx, data in enumerate(loader):
-            ########## Process Inputs ##########
-            edge_tensor, rgb_tensor = data
-            edge_tensor, rgb_tensor = norm(edge_tensor).to(gpu_id), norm(rgb_tensor).to(
-                gpu_id
+    try:
+        for e in tqdm(range(num_epochs)):
+            start = time.time()
+
+            # discriminator logging
+            batch_disc_losses = []
+
+            # generator/encoder logging
+            batch_gen_enc_losses = []
+            batch_kl_div_losses = []
+            batch_recon_losses = []
+            batch_total_losses = []
+
+            # generator only logging
+            batch_latent_rec_losses = []
+            for idx, data in enumerate(loader):
+                ########## Process Inputs ##########
+                edge_tensor, rgb_tensor = data
+                edge_tensor, rgb_tensor = norm(edge_tensor).to(gpu_id), norm(
+                    rgb_tensor
+                ).to(gpu_id)
+                real_A = edge_tensor
+                real_B = rgb_tensor
+
+                disc_loss = step_discriminators(real_A, real_B)
+                (
+                    gen_enc_loss,
+                    KL_div,
+                    recon_loss,
+                    total_loss,
+                    latent_rec_loss,
+                ) = step_gen_enc(real_A, real_B)
+
+                batch_disc_losses.append(disc_loss)
+
+                batch_gen_enc_losses.append(gen_enc_loss)
+                batch_kl_div_losses.append(KL_div)
+                batch_recon_losses.append(recon_loss)
+                batch_total_losses.append(total_loss)
+
+                batch_latent_rec_losses.append(latent_rec_loss)
+
+                if idx > 5:
+                    break
+
+            training_epoch_avg_losses.append(
+                [
+                    np.mean(batch_disc_losses),
+                    np.mean(batch_gen_enc_losses),
+                    np.mean(batch_kl_div_losses),
+                    np.mean(batch_recon_losses),
+                    np.mean(batch_total_losses),
+                    np.mean(batch_latent_rec_losses),
+                ]
             )
-            real_A = edge_tensor
-            real_B = rgb_tensor
+            # decay label noise each epoch
+            label_sigma *= label_sigma_decay
+    finally:
+        print(f'Logging losses at: {loss_root_dir}. Access with:')
+        print(f"\tnp.load('{loss_root_dir}/train_epoch_avg_losses.npz', allow_pickle=True)['arr_0']")
+        log_losses(loss_root_dir)
 
-            step_discriminators(real_A, real_B)
-            step_gen_enc(real_A, real_B)
 
-            """ Optional TODO: 
-				1. You may want to visualize results during training for debugging purpose
-				2. Save your model every few iterations
-			"""
-
+""" Optional TODO: 
+    1. You may want to visualize results during training for debugging purpose
+    2. Save your model every few iterations
+"""
 
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
