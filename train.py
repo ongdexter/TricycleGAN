@@ -3,6 +3,7 @@ import warnings
 import cv2
 import numpy as np
 from torch.nn.functional import mse_loss
+from torch.utils.tensorboard import SummaryWriter
 
 from datasets.edge2shoes import Edge2Shoe
 from models.discriminators import Discriminator, TwinDiscriminator
@@ -88,6 +89,39 @@ training_session_id = "CHANGE_THIS"
 img_export_fmt = "train_vis_e-{}_i-{}_{}.png"
 first_write = True
 
+def init_log_dir(log_dir):
+    versions = []
+    for root, dirs, subdirs in os.walk(log_dir):
+        for dir in dirs:
+            if 'logs_' in dir:
+                versions.append(dir.split('_')[-1])
+    if len(versions) == 0:
+        checkpoint_dir = log_dir + '/logs_v1'
+    else:
+        latest_ver = int(sorted(versions)[-1].split('v')[-1]) + 1
+        checkpoint_dir = log_dir + '/logs_v' + str(latest_ver)
+    os.mkdir(checkpoint_dir)
+    os.mkdir(checkpoint_dir + '/checkpoints')
+    
+    return checkpoint_dir
+    
+def save_checkpoints(log_dir, epoch):
+    path = log_dir + '/checkpoints/ckpt_' + str(epoch) + '.pt'
+    torch.save({
+        'epoch': epoch,
+        'generator': generator.state_dict(),
+        'optimizer_G': optimizer_G.state_dict(),
+        'encoder': encoder.state_dict(),
+        'optimizer_E': optimizer_E.state_dict(),
+        'D_VAE': D_VAE.state_dict(),
+        'optimizer_D_VAE': optimizer_D_VAE.state_dict(),
+        'D_LR': D_LR.state_dict(),
+        'optimizer_D_LR': optimizer_D_LR.state_dict()
+    }, path)
+
+# logging
+log_dir = init_log_dir('./logs')
+writer = SummaryWriter(log_dir=log_dir)
 
 def write_to_disk(image, format_list):
     """
@@ -284,6 +318,18 @@ def main():
 				1. You may want to visualize results during training for debugging purpose
 				2. Save your model every few iterations
 			"""
+        # save checkpoints
+        if e % 5 == 0:
+            save_checkpoints(log_dir, e)
+                
+        # tensorboard logging
+        # writer.add_scalar('loss1/train', , e)
+        # writer.add_scalar('loss1/val', , e)
+        # writer.add_scalar('loss2/train', , e)
+        # writer.add_scalar('loss2/val', , e)
+        # writer.add_scalar('images/real_A', , e)
+        # writer.add_scalar('images/real_B', , e)
+        # writer.add_scalar('images/', , e)
 
 
 if __name__ == "__main__":
