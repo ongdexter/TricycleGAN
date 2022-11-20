@@ -21,13 +21,13 @@ import itertools
 import torch
 import time
 import pdb
+from tqdm import tqdm
 
 # Training Configurations
 # (You may put your needed configuration here. Please feel free to add more or use argparse. )
 # img_dir = '/home/zlz/BicycleGAN/datasets/edges2shoes/train/'
-img_dir = (
-    "../edges2shoes/train/"
-)
+train_img_dir = "../edges2shoes/train/"
+val_img_dir = "../edges2shoes/val/"
 img_shape = (3, 128, 128)  # Please use this image dimension faster training purpose
 
 # TODO: fine-tune these somehow?
@@ -59,7 +59,8 @@ def norm(image):
 
 # Denormalize image tensor
 def denorm(tensor):
-    return (((tensor + 1.0) / 2.0) * 255.0)
+    return ((tensor + 1.0) / 2.0) * 255.0
+
 
 # Reparameterization helper function
 # (You may need this helper function here or inside models.py, depending on your encoder implementation)
@@ -70,8 +71,10 @@ torch.manual_seed(1)
 np.random.seed(1)
 
 # Define DataLoader
-dataset = Edge2Shoe(img_dir)
-loader = data.DataLoader(dataset, batch_size=batch_size)
+train_dataset = Edge2Shoe(train_img_dir)
+val_dataset = Edge2Shoe(val_img_dir)
+training_loader = data.DataLoader(train_dataset, batch_size=batch_size)
+validation_loader = data.DataLoader(val_dataset, batch_size=batch_size)
 
 # Loss functions
 mae_loss = torch.nn.L1Loss().to(gpu_id)
@@ -94,39 +97,45 @@ training_session_id = "CHANGE_THIS"
 img_export_fmt = "train_vis_e-{}_i-{}_{}.png"
 first_write = True
 
+
 def init_log_dir(log_dir):
     versions = []
     for root, dirs, subdirs in os.walk(log_dir):
         for dir in dirs:
-            if 'logs_' in dir:
-                versions.append(int(dir.split('_')[-1].split('v')[-1]))
+            if "logs_" in dir:
+                versions.append(int(dir.split("_")[-1].split("v")[-1]))
     if len(versions) == 0:
-        checkpoint_dir = log_dir + '/logs_v1'
+        checkpoint_dir = log_dir + "/logs_v1"
     else:
         latest_ver = sorted(versions)[-1] + 1
-        checkpoint_dir = log_dir + '/logs_v' + str(latest_ver)
+        checkpoint_dir = log_dir + "/logs_v" + str(latest_ver)
     os.mkdir(checkpoint_dir)
-    os.mkdir(checkpoint_dir + '/checkpoints')
-    os.mkdir(checkpoint_dir + '/images')
-    
+    os.mkdir(checkpoint_dir + "/checkpoints")
+    os.mkdir(checkpoint_dir + "/images")
+
     return checkpoint_dir
 
+
 def save_checkpoints(log_dir, epoch):
-    path = log_dir + '/checkpoints/ckpt_' + str(epoch) + '.pt'
-    torch.save({
-        'epoch': epoch,
-        'generator': generator.state_dict(),
-        'optimizer_G': optimizer_G.state_dict(),
-        'encoder': encoder.state_dict(),
-        'optimizer_E': optimizer_E.state_dict(),
-        'D_VAE': D_VAE.state_dict(),
-        'optimizer_D_VAE': optimizer_D_VAE.state_dict(),
-        'D_LR': D_LR.state_dict(),
-        'optimizer_D_LR': optimizer_D_LR.state_dict()
-    }, path)
+    path = log_dir + "/checkpoints/ckpt_" + str(epoch) + ".pt"
+    torch.save(
+        {
+            "epoch": epoch,
+            "generator": generator.state_dict(),
+            "optimizer_G": optimizer_G.state_dict(),
+            "encoder": encoder.state_dict(),
+            "optimizer_E": optimizer_E.state_dict(),
+            "D_VAE": D_VAE.state_dict(),
+            "optimizer_D_VAE": optimizer_D_VAE.state_dict(),
+            "D_LR": D_LR.state_dict(),
+            "optimizer_D_LR": optimizer_D_LR.state_dict(),
+        },
+        path,
+    )
+
 
 # logging
-log_dir = init_log_dir('../logs')
+log_dir = init_log_dir("../logs")
 writer = SummaryWriter(log_dir=log_dir)
 
 # loss logging
@@ -134,11 +143,13 @@ loss_root_dir = log_dir
 training_epoch_avg_losses = []
 validation_epoch_avg_losses = []
 
+
 def log_losses(dir_path):
     teal = np.array(training_epoch_avg_losses)
     veal = np.array(validation_epoch_avg_losses)
     np.savez(os.path.join(dir_path, "train_epoch_avg_losses.npz"), teal)
     np.savez(os.path.join(dir_path, "val_epoch_avg_losses.npz"), veal)
+
 
 def write_to_disk(image, format_list):
     """
@@ -150,7 +161,7 @@ def write_to_disk(image, format_list):
     global first_write
     fname = img_export_fmt.format(*format_list)
     # export_path = os.path.join(img_export_path, training_session_id)
-    export_path = os.path.join(log_dir, 'images')
+    export_path = os.path.join(log_dir, "images")
     # if os.path.isdir(export_path) and first_write:
     #     print(f"[FATAL]: Training session ID {training_session_id} already exists!")
     #     raise Exception
@@ -348,16 +359,100 @@ def step_gen_enc(real_A, real_B):
     )
 
 
-def main():
-    from tqdm import tqdm
+def all_train():
+    D_VAE.train()
+    D_LR.train()
+    generator.train()
+    encoder.train()
 
+
+def all_eval():
+    D_VAE.eval()
+    D_LR.eval()
+    generator.eval()
+    encoder.eval()
+
+
+def run_validation(val_dl, epoch_num):
+    all_eval()
+
+    val_disc_losses = []
+    val_gen_enc_losses = []
+    val_kl_div_losses = []
+    val_recon_losses = []
+    val_total_losses = []
+    val_latent_rec_losses = []
+
+    for idx, data in enumerate(tqdm(val_dl)):
+        ########## Process Inputs ##########
+        edge_tensor, rgb_tensor = data
+        edge_tensor, rgb_tensor = norm(edge_tensor).to(gpu_id), norm(rgb_tensor).to(
+            gpu_id
+        )
+        real_A = edge_tensor
+        real_B = rgb_tensor
+
+        disc_loss = step_discriminators(real_A, real_B)
+        (
+            gen_enc_loss,
+            KL_div,
+            recon_loss,
+            total_loss,
+            latent_rec_loss,
+        ) = step_gen_enc(real_A, real_B)
+
+        val_disc_losses.append(disc_loss)
+
+        val_gen_enc_losses.append(gen_enc_loss)
+        val_kl_div_losses.append(KL_div)
+        val_recon_losses.append(recon_loss)
+        val_total_losses.append(total_loss)
+
+        val_latent_rec_losses.append(latent_rec_loss)
+
+        # if idx > 5:
+        #     break
+
+        # visualization
+    enc_tensors = encoder(real_B)
+    latent_sample = encoder.reparam_trick(*enc_tensors)
+    fake_B = generator(real_A, latent_sample)
+
+    rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
+    fat_finger_B = generator(real_A, rand_sample)
+
+    export_train_vis(
+        torch.cat((real_A[:8], real_B[:8]), dim=-1),
+        torch.cat((fake_B[:8], fat_finger_B[:8]), dim=-1),
+        epoch_num,
+    )
+    writer.add_image("images/real_A/val", real_A[0] / 2.0 + 0.5, epoch_num)
+    writer.add_image("images/real_B/val", real_B[0] / 2.0 + 0.5, epoch_num)
+    writer.add_image("images/fake_B/val", fake_B[0] / 2.0 + 0.5, epoch_num)
+    writer.add_image("images/fat_finger_B/val", fat_finger_B[0] / 2.0 + 0.5, epoch_num)
+
+    validation_epoch_avg_losses.append(
+        [
+            np.mean(val_disc_losses),
+            np.mean(val_gen_enc_losses),
+            np.mean(val_kl_div_losses),
+            np.mean(val_recon_losses),
+            np.mean(val_total_losses),
+            np.mean(val_latent_rec_losses),
+        ]
+    )
+
+
+def main():
     global label_sigma
 
     # Training
-    total_steps = len(loader) * num_epochs
+    total_steps = len(training_loader) * num_epochs
     step = 0
     try:
         for e in range(num_epochs):
+            all_train()
+
             start = time.time()
 
             # discriminator logging
@@ -371,11 +466,11 @@ def main():
 
             # generator only logging
             batch_latent_rec_losses = []
-            
+
             real_A = None
             real_B = None
-            
-            for idx, data in enumerate(tqdm(loader)):
+
+            for idx, data in enumerate(tqdm(training_loader)):
                 ########## Process Inputs ##########
                 edge_tensor, rgb_tensor = data
                 edge_tensor, rgb_tensor = norm(edge_tensor).to(gpu_id), norm(
@@ -402,23 +497,31 @@ def main():
 
                 batch_latent_rec_losses.append(latent_rec_loss)
 
-                # if idx > 5:
-                #     break
-            
+                if idx > 5:
+                    break
+
             # visualization
             enc_tensors = encoder(real_B)
             latent_sample = encoder.reparam_trick(*enc_tensors)
             fake_B = generator(real_A, latent_sample)
-            
-            rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
+
+            rand_sample = torch.normal(0, 1, latent_sample.shape).to(
+                latent_sample.device
+            )
             fat_finger_B = generator(real_A, rand_sample)
-            
-            export_train_vis(torch.cat((real_A[:8], real_B[:8]), dim=-1), torch.cat((fake_B[:8], fat_finger_B[:8]), dim=-1), e)
-            writer.add_image('images/real_A/train', real_A[0] / 2.0 + 0.5, e)
-            writer.add_image('images/real_B/train', real_B[0] / 2.0 + 0.5, e)
-            writer.add_image('images/fake_B/train', fake_B[0] / 2.0 + 0.5, e)
-            writer.add_image('images/fat_finger_B/train', fat_finger_B[0] / 2.0 + 0.5, e)
-                        
+
+            export_train_vis(
+                torch.cat((real_A[:8], real_B[:8]), dim=-1),
+                torch.cat((fake_B[:8], fat_finger_B[:8]), dim=-1),
+                e,
+            )
+            writer.add_image("images/real_A/train", real_A[0] / 2.0 + 0.5, e)
+            writer.add_image("images/real_B/train", real_B[0] / 2.0 + 0.5, e)
+            writer.add_image("images/fake_B/train", fake_B[0] / 2.0 + 0.5, e)
+            writer.add_image(
+                "images/fat_finger_B/train", fat_finger_B[0] / 2.0 + 0.5, e
+            )
+
             training_epoch_avg_losses.append(
                 [
                     np.mean(batch_disc_losses),
@@ -429,31 +532,39 @@ def main():
                     np.mean(batch_latent_rec_losses),
                 ]
             )
+
+            # do validation
+            run_validation(validation_loader, epoch_num=e)
+
             # decay label noise each epoch
             label_sigma *= label_sigma_decay
-            
+
             # save checkpoints
             if e % 5 == 0:
                 save_checkpoints(log_dir, e)
-                    
+
             # tensorboard logging
-            writer.add_scalar('loss_disc/train', np.mean(batch_disc_losses), e)
-            writer.add_scalar('loss_gen_enc/train', np.mean(batch_gen_enc_losses), e)
-            writer.add_scalar('loss_kl/train', np.mean(batch_kl_div_losses), e)
-            writer.add_scalar('loss_recon/train', np.mean(batch_recon_losses), e)
-            writer.add_scalar('loss_latent_rec/train', np.mean(np.mean(batch_latent_rec_losses)), e)
-            writer.add_scalar('loss_total/train', np.mean(batch_total_losses), e)
+            writer.add_scalar("loss_disc/train", np.mean(batch_disc_losses), e)
+            writer.add_scalar("loss_gen_enc/train", np.mean(batch_gen_enc_losses), e)
+            writer.add_scalar("loss_kl/train", np.mean(batch_kl_div_losses), e)
+            writer.add_scalar("loss_recon/train", np.mean(batch_recon_losses), e)
+            writer.add_scalar(
+                "loss_latent_rec/train", np.mean(np.mean(batch_latent_rec_losses)), e
+            )
+            writer.add_scalar("loss_total/train", np.mean(batch_total_losses), e)
 
     finally:
-        print(f'Logging losses at: {loss_root_dir}. Access with:')
-        print(f"\tnp.load('{loss_root_dir}/train_epoch_avg_losses.npz', allow_pickle=True)['arr_0']")
+        print(f"Logging losses at: {loss_root_dir}. Access with:")
+        print(
+            f"\tnp.load('{loss_root_dir}/train_epoch_avg_losses.npz', allow_pickle=True)['arr_0']"
+        )
         log_losses(loss_root_dir)
-
 
         """ Optional TODO: 
             1. You may want to visualize results during training for debugging purpose
             2. Save your model every few iterations
         """
+
 
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
