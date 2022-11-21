@@ -94,7 +94,7 @@ optimizer_D_LR = torch.optim.Adam(D_LR.parameters(), lr=lr_rate, betas=betas)
 # training visualization
 img_export_path = "./train_img/"
 training_session_id = "CHANGE_THIS"
-img_export_fmt = "train_vis_e-{}_i-{}_{}.png"
+img_export_fmt = "{}_vis_e-{}_i-{}_{}.png"
 first_write = True
 
 
@@ -173,7 +173,7 @@ def write_to_disk(image, format_list):
     cv2.imwrite(export_file, image)
 
 
-def export_train_vis(inputs, outputs, epoch_num):
+def export_train_vis(inputs, outputs, epoch_num, train_val):
     """
     Run inference on the model, generating some outputs and storing them to disk for inspection.
     :param model: The BicycleGAN-model - should have an inference function implemented, and should be in eval mode.
@@ -195,8 +195,8 @@ def export_train_vis(inputs, outputs, epoch_num):
         img_in = img_in.permute(1, 2, 0).cpu().detach().numpy()
         img_in = denorm(img_in)
 
-        write_to_disk(img_in, [epoch_num, i, "src"])  # model input
-        write_to_disk(image, [epoch_num, i, "gen"])  # model output
+        write_to_disk(img_in, [train_val, epoch_num, i, "src"])  # model input
+        write_to_disk(image, [train_val, epoch_num, i, "gen"])  # model output
 
 
 def smart_mse_loss(preds, val):
@@ -372,6 +372,66 @@ def all_eval():
     generator.eval()
     encoder.eval()
 
+def run_visualization(train_dl, epoch_num):
+    all_eval()
+
+    real_A_samples = None
+    real_B_samples = None
+
+    num_viz = 10
+    num_samples = 0
+
+    for idx, data in enumerate(tqdm(train_dl)):
+        ########## Process Inputs ##########
+        edge_tensor, rgb_tensor = data
+        edge_tensor, rgb_tensor = norm(edge_tensor).to(gpu_id), norm(rgb_tensor).to(
+            gpu_id
+        )
+        real_A = edge_tensor
+        real_B = rgb_tensor
+
+        disc_loss = step_discriminators(real_A, real_B)
+        (
+            gen_enc_loss,
+            KL_div,
+            recon_loss,
+            total_loss,
+            latent_rec_loss,
+        ) = step_gen_enc(real_A, real_B)
+        
+        if real_A_samples is None:
+            real_A_samples = real_A
+        else:
+            real_A_samples = torch.cat((real_A_samples, real_A), dim=0)
+        if real_B_samples is None:
+            real_B_samples = real_B
+        else:
+            real_B_samples = torch.cat((real_B_samples, real_B), dim=0)
+
+        num_samples += real_A.shape[0]
+
+        # run until we have at least 10 samples
+        if num_samples >= num_viz:
+            break
+
+    # visualization
+    enc_tensors = encoder(real_B_samples)
+    latent_sample = encoder.reparam_trick(*enc_tensors)
+    fake_B = generator(real_A_samples, latent_sample)
+
+    rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
+    fat_finger_B = generator(real_A_samples, rand_sample)
+
+    export_train_vis(
+        torch.cat((real_A_samples[:num_viz], real_B_samples[:num_viz]), dim=-1),
+        torch.cat((fake_B[:num_viz], fat_finger_B[:num_viz]), dim=-1),
+        epoch_num,
+        'train'
+    )
+    writer.add_image("images/real_A/train", real_A[0] / 2.0 + 0.5, epoch_num)
+    writer.add_image("images/real_B/train", real_B[0] / 2.0 + 0.5, epoch_num)
+    writer.add_image("images/fake_B/train", fake_B[0] / 2.0 + 0.5, epoch_num)
+    writer.add_image("images/fat_finger_B/train", fat_finger_B[0] / 2.0 + 0.5, epoch_num)
 
 def run_validation(val_dl, epoch_num):
     all_eval()
@@ -382,6 +442,14 @@ def run_validation(val_dl, epoch_num):
     val_recon_losses = []
     val_total_losses = []
     val_latent_rec_losses = []
+    
+    real_A = None
+    real_B = None
+    real_A_samples = None
+    real_B_samples = None
+
+    num_viz = 10
+    num_samples = 0
 
     for idx, data in enumerate(tqdm(val_dl)):
         ########## Process Inputs ##########
@@ -400,31 +468,41 @@ def run_validation(val_dl, epoch_num):
             total_loss,
             latent_rec_loss,
         ) = step_gen_enc(real_A, real_B)
+        
+        if real_A_samples is None:
+            real_A_samples = real_A
+        else:
+            real_A_samples = torch.cat((real_A_samples, real_A), dim=0)
+        if real_B_samples is None:
+            real_B_samples = real_B
+        else:
+            real_B_samples = torch.cat((real_B_samples, real_B), dim=0)
 
         val_disc_losses.append(disc_loss)
-
         val_gen_enc_losses.append(gen_enc_loss)
         val_kl_div_losses.append(KL_div)
         val_recon_losses.append(recon_loss)
         val_total_losses.append(total_loss)
-
         val_latent_rec_losses.append(latent_rec_loss)
 
-        # if idx > 5:
-        #     break
+        # run until we have at least 10 samples
+        if num_samples >= num_viz:
+            break
 
-        # visualization
-    enc_tensors = encoder(real_B)
+
+    # visualization
+    enc_tensors = encoder(real_B_samples)
     latent_sample = encoder.reparam_trick(*enc_tensors)
-    fake_B = generator(real_A, latent_sample)
+    fake_B = generator(real_A_samples, latent_sample)
 
     rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
-    fat_finger_B = generator(real_A, rand_sample)
+    fat_finger_B = generator(real_A_samples, rand_sample)
 
     export_train_vis(
-        torch.cat((real_A[:8], real_B[:8]), dim=-1),
-        torch.cat((fake_B[:8], fat_finger_B[:8]), dim=-1),
+        torch.cat((real_A_samples[:num_viz], real_B_samples[:num_viz]), dim=-1),
+        torch.cat((fake_B[:num_viz], fat_finger_B[:num_viz]), dim=-1),
         epoch_num,
+        'val'
     )
     writer.add_image("images/real_A/val", real_A[0] / 2.0 + 0.5, epoch_num)
     writer.add_image("images/real_B/val", real_B[0] / 2.0 + 0.5, epoch_num)
@@ -466,10 +544,7 @@ def main():
 
             # generator only logging
             batch_latent_rec_losses = []
-
-            real_A = None
-            real_B = None
-
+            
             for idx, data in enumerate(tqdm(training_loader)):
                 ########## Process Inputs ##########
                 edge_tensor, rgb_tensor = data
@@ -499,40 +574,10 @@ def main():
 
                 if idx > 5:
                     break
-
-            # visualization
-            enc_tensors = encoder(real_B)
-            latent_sample = encoder.reparam_trick(*enc_tensors)
-            fake_B = generator(real_A, latent_sample)
-
-            rand_sample = torch.normal(0, 1, latent_sample.shape).to(
-                latent_sample.device
-            )
-            fat_finger_B = generator(real_A, rand_sample)
-
-            export_train_vis(
-                torch.cat((real_A[:8], real_B[:8]), dim=-1),
-                torch.cat((fake_B[:8], fat_finger_B[:8]), dim=-1),
-                e,
-            )
-            writer.add_image("images/real_A/train", real_A[0] / 2.0 + 0.5, e)
-            writer.add_image("images/real_B/train", real_B[0] / 2.0 + 0.5, e)
-            writer.add_image("images/fake_B/train", fake_B[0] / 2.0 + 0.5, e)
-            writer.add_image(
-                "images/fat_finger_B/train", fat_finger_B[0] / 2.0 + 0.5, e
-            )
-
-            training_epoch_avg_losses.append(
-                [
-                    np.mean(batch_disc_losses),
-                    np.mean(batch_gen_enc_losses),
-                    np.mean(batch_kl_div_losses),
-                    np.mean(batch_recon_losses),
-                    np.mean(batch_total_losses),
-                    np.mean(batch_latent_rec_losses),
-                ]
-            )
-
+                
+            # do visualization
+            run_visualization(training_loader, epoch_num=e)
+            
             # do validation
             run_validation(validation_loader, epoch_num=e)
 
