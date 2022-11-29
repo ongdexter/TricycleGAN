@@ -117,7 +117,7 @@ def write_to_disk_rand(image, format_list):
 
 
 
-def export_train_vis(inputs, outputs, epoch_num, train_val):
+def export_train_vis(inputs, gts, outputs, epoch_num, train_val):
     """
     Run inference on the model, generating some outputs and storing them to disk for inspection.
     :param model: The BicycleGAN-model - should have an inference function implemented, and should be in eval mode.
@@ -128,11 +128,13 @@ def export_train_vis(inputs, outputs, epoch_num, train_val):
     #     model.inference(inputs).detach().cpu().permute(0, 3, 1).numpy()
     # )  # should be Bx<img_dims>
     for i in range(outputs.shape[0]):
-        image = outputs[i, ...]
+        image_out = outputs[i, ...]
+        image_out = denorm(image_out)
+        image_out = image_out.permute(1, 2, 0).cpu().detach().numpy()
 
-        # TODO: perform some (de)-normalization and fix channel order
-        image = denorm(image)
-        image = image.permute(1, 2, 0).cpu().detach().numpy()
+        image_gt = gts[i, ...]
+        image_gt = denorm(image_gt)
+        image_gt = image_gt.permute(1, 2, 0).cpu().detach().numpy()
 
         # write to disk
         img_in = inputs[i, ...]
@@ -140,7 +142,9 @@ def export_train_vis(inputs, outputs, epoch_num, train_val):
         img_in = denorm(img_in)
 
         write_to_disk(img_in, [epoch_num, "src"])  # model input
-        write_to_disk(image, [epoch_num, "ground_truth"])  # model output
+        write_to_disk(image_gt, [epoch_num, "ground_truth"])  # model output
+        write_to_disk(image_out, [epoch_num, "output"])  # model output
+        
         
 def export_rand_viz(rands, epoch_num, iter_num, train_val):
     for i in range(rands.shape[0]):
@@ -189,6 +193,7 @@ def run_inference(val_dl):
             export_rand_viz(fat_finger_B, idx, i, 'val')
         
         export_train_vis(
+            real_A_samples,
             real_B_samples,
             fake_B,
             idx,
