@@ -580,9 +580,6 @@ def main():
                 batch_total_losses.append(total_loss)
 
                 batch_latent_rec_losses.append(latent_rec_loss)
-
-                if idx > 5:
-                    break
                 
             # do visualization
             run_visualization(training_loader, epoch_num=e)
