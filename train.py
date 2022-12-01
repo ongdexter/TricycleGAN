@@ -32,7 +32,7 @@ img_shape = (3, 128, 128)  # Please use this image dimension faster training pur
 
 # TODO: fine-tune these somehow?
 num_epochs = 50
-batch_size = 8
+batch_size = 1
 lr_rate = 2e-4  # Adam optimizer learning rate
 betas = (0.5, 0.999)  # Adam optimizer beta 1, beta 2
 lambda_pixel = 10  # Loss weights for pixel loss
@@ -224,15 +224,15 @@ def step_discriminators(real_A, real_B):
     # encoder and generator
     enc_tensors = encoder(real_B)
     latent_sample = encoder.reparam_trick(*enc_tensors)
-    fake_B = generator(real_A, latent_sample)
+    fake_B = generator(real_A, latent_sample).detach()  # detach fake image
 
     # cVAE discriminator
     dfake_vae_1, dfake_vae_2 = D_VAE(fake_B)
     dreal_vae_1, dreal_vae_2 = D_VAE(real_B)
 
     # cLR discriminator
-    rand_sample = torch.normal(0, 1, latent_sample.shape).to(latent_sample.device)
-    fat_finger_B = generator(real_A, rand_sample)
+    rand_sample = torch.normal(0, 1, latent_sample.shape).detach().to(latent_sample.device)
+    fat_finger_B = generator(real_A, rand_sample).detach()  # detach the ff image
     dfake_lr_1, dfake_lr_2 = D_LR(fat_finger_B)
     dreal_lr_1, dreal_lr_2 = D_LR(real_B)
 
@@ -308,8 +308,9 @@ def step_gen_enc(real_A, real_B):
     )
 
     # KL divergence term
+    # 0.5 * (enc_tensors[0] ** 2 + torch.exp(enc_tensors[1]) - enc_tensors[1] - 1)
     KL_div = lambda_kl * torch.sum(
-        0.5 * (enc_tensors[0] ** 2 + torch.exp(enc_tensors[1]) - enc_tensors[1] - 1)
+        0.5 * (- 1 - enc_tensors[1] + enc_tensors[0].pow(2) + enc_tensors[1].exp())
     )
 
     # image reconstruction loss
@@ -326,6 +327,10 @@ def step_gen_enc(real_A, real_B):
     optimizer_G.zero_grad()
     optimizer_D_VAE.zero_grad()
     optimizer_D_LR.zero_grad()
+
+    # do not leak gradients over the discriminators
+    D_LR.requires_grad_(False)
+    D_VAE.requires_grad_(False)
 
     # backward
     total_loss.backward(retain_graph=True)
@@ -349,6 +354,10 @@ def step_gen_enc(real_A, real_B):
     # backwards
     latent_recon_loss.backward()
     optimizer_G.step()
+
+    # restore
+    D_LR.requires_grad_(True)
+    D_VAE.requires_grad_(True)
 
     return (
         gen_enc_loss.detach().cpu(),
